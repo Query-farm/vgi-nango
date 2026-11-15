@@ -22,9 +22,31 @@ export const SOURCE_URL = "https://github.com/Query-farm/vgi-nango";
  * `vgi.category` must name one of these.
  */
 export const SCHEMA_CATEGORIES = [
-  { name: "text", title: "Text", description: "Functions that build or transform strings." },
-  { name: "generators", title: "Generators", description: "Table functions that generate rows." },
-  { name: "api", title: "REST APIs", description: "Table functions that read from HTTP APIs." },
+  {
+    name: "catalog",
+    title: "Providers and Integrations",
+    description: "Nango's provider catalog and the integrations (provider configs) set up in the environment.",
+  },
+  {
+    name: "connections",
+    title: "Connections",
+    description: "End-user connections: tags, errors, and credential type and expiry (never tokens).",
+  },
+  {
+    name: "syncs",
+    title: "Syncs and Records",
+    description: "Deployed syncs and actions, sync health, and the records syncs stored.",
+  },
+  {
+    name: "proxy",
+    title: "Proxy",
+    description: "Read-only calls to any brokered API through the Nango proxy with managed credentials.",
+  },
+  {
+    name: "environment",
+    title: "Environment",
+    description: "Environment variables (names only) and the account's environments.",
+  },
 ] as const;
 
 export type Category = (typeof SCHEMA_CATEGORIES)[number]["name"];
@@ -61,83 +83,117 @@ export function column(name: string, type: VgiDataType, comment: string, nullabl
   return field(name, type, nullable, new Map([["comment", comment]]));
 }
 
+const SOURCES_MD =
+  "### Sources and references\n\n" +
+  "- [Nango API reference](https://nango.dev/docs/reference/backend/http-api/authentication) and its [OpenAPI spec](https://github.com/NangoHQ/nango/blob/master/docs/spec.yaml)\n" +
+  "- [Records API](https://nango.dev/docs/reference/api/records/get) — cursor paging, `modified_after`, `filter`\n" +
+  "- [Proxy](https://nango.dev/docs/guides/proxy-requests) and its pagination config\n" +
+  "- [Self-hosting Nango](https://nango.dev/docs/guides/self-hosting/free-self-hosting/overview)";
+
+export const CATALOG_COMMENT =
+  "Nango as SQL: its provider catalog, integrations, connections, syncs and synced records, plus read-only calls to 400+ APIs through the Nango proxy with Nango-managed credentials.";
+
 export const CATALOG_DOC_LLM =
-  "An example VGI worker generated from the Query.Farm starter template. It shows the three shapes " +
-  "most workers need: a vectorized scalar function with an overload, a deterministic table " +
-  "function with a named default argument, and a table function that pages through a REST API with " +
-  "retries and an optional bearer token taken from a DuckDB secret or an environment variable. " +
-  "Replace them with your own functions; keep the metadata complete so agents can discover and " +
-  "call them.";
+  "Read-only SQL access to a Nango environment (Nango Cloud or self-hosted), the open-source unified API " +
+  "and managed-OAuth platform. Use it to (1) audit the integration setup: the provider catalog " +
+  "(providers), configured integrations, end-user connections with their tags, errors and token expiry " +
+  "(connections()), deployed syncs and actions, sync health per connection (connection_syncs) and environment variable names; " +
+  "(2) read what syncs stored with records(integration, connection_id, model), typed from the model's JSON " +
+  "Schema; and (3) call any brokered API read-only with proxy(connection_id, provider_config_key, path), " +
+  "where Nango injects and refreshes the credential and the worker follows cursor / link / offset " +
+  "pagination. Every object needs a `nango` DuckDB secret with SECRET_KEY (an environment secret key) and " +
+  "optional HOST (default https://api.nango.dev). Access and refresh tokens, integration client secrets and " +
+  "environment variable values are never returned. Upstream docs: https://nango.dev/docs ; API spec " +
+  "https://github.com/NangoHQ/nango/blob/master/docs/spec.yaml .";
 
 export const CATALOG_DOC_MD =
-  "# VGI nango worker\n\n" +
-  "**An example [VGI](https://query.farm/vgi) worker that brings custom functions into DuckDB " +
-  "SQL.** It was generated from the Query.Farm starter template and is meant to be renamed and " +
-  "rewritten: every function here demonstrates one pattern you will reuse, from vectorized scalars " +
-  "and streaming table functions to a REST API reader that retries politely and reads a bearer " +
-  "token from a DuckDB secret or the environment.\n\n" +
-  "The worker speaks Apache Arrow to DuckDB over stdin/stdout, a Unix socket, or HTTP, so the " +
-  "same code runs as a local subprocess or a hosted service. See the " +
-  "[VGI documentation](https://query.farm/vgi/docs/) to learn more.";
+  "# Nango\n\n" +
+  "Query a [Nango](https://nango.dev) environment from DuckDB, read-only: the provider catalog, " +
+  "integrations, connections (credential type and expiry, never tokens), syncs, actions, sync status, " +
+  "synced records, and any of the 400+ APIs Nango brokers through its proxy.\n\n" +
+  "Create a `nango` secret with your environment `SECRET_KEY` (and `HOST` for a self-hosted Nango). " +
+  "Filters push down into Nango's own parameters (`modified_after`, `filter`, `ids`, connection tags), " +
+  "pagination cursors travel with the scan, and HTTP 429 is retried after `Retry-After`.\n\n" +
+  SOURCES_MD;
 
 export const SCHEMA_DOC_LLM =
-  "The `main` schema holds the starter template's example functions, one per common worker " +
-  "pattern. `greet(name)` and `greet(name, style)` are vectorized scalars: use them inside a " +
-  "projection or predicate, one result per row; `style` is a constant that must be 'casual' or " +
-  "'formal'. `sequence_table(count, step := 1)` is a deterministic table function that returns " +
-  "`count` rows of `(n, squared)`; use it for demos, tests, and as a template for generators. " +
-  "`fetch_items(base_url, page_size := 100)` reads every item from a paginated JSON REST API as " +
-  "`(id, name, category, price)` rows, streaming one page per batch, retrying rate-limited " +
-  "requests, and authenticating with a `nango_api` DuckDB secret or the `NANGO_API_TOKEN` " +
-  "environment variable. Scalars cannot take named arguments; table functions can.";
+  "Nango objects as SQL. Parameterless listings are tables (providers, integrations, syncs, actions, " +
+  "connection_syncs, environment_variables, environments); connections(tags := …) is a table function; " +
+  "records(integration, connection_id, model, …) reads a sync's stored records; proxy(connection_id, " +
+  "provider_config_key, path, …) calls the upstream API through Nango, GET/HEAD only. integration = " +
+  "provider_config_key = integrations.unique_key throughout. All objects need a `nango` secret.";
 
 export const SCHEMA_DOC_MD =
   "## main\n\n" +
-  "The starter template's example functions, one per common worker pattern.\n\n" +
-  "- **Scalars** answer one question per row and slot into a projection or predicate.\n" +
-  "- **Table functions** return sets of rows, streamed to DuckDB in Arrow batches.\n" +
-  "- **REST readers** page through an HTTP API and authenticate with a DuckDB secret.";
+  "Nango's catalog, integrations, connections, syncs, records and the read-only proxy.\n\n" +
+  "Listings are tables; `connections()`, `records()` and `proxy()` are table functions. " +
+  "All objects need a `nango` secret; filters push down into Nango's query parameters.";
 
 export const AGENT_TEST_TASKS = [
-  { name: "formal_greeting", prompt: "Using the nango worker, greet the name 'Grace' formally." },
+  { name: "crm_providers", prompt: "Which providers in the Nango catalog are in the crm category?" },
   {
-    name: "sum_of_squares",
+    name: "unconfigured_integrations",
+    prompt: "Which Nango integrations are missing credential fields, and which fields?",
+  },
+  { name: "broken_connections", prompt: "Which Nango connections have an auth error?" },
+  { name: "org_connections", prompt: "List the connection ids that belong to organization org_acme." },
+  { name: "token_expiry", prompt: "When does the access token of connection conn-ada-github expire?" },
+  { name: "failing_syncs", prompt: "Which syncs are in the ERROR state, and on which connections?" },
+  {
+    name: "open_issues",
     prompt:
-      "Using the nango worker, what is the sum of the squared column for the first 10 rows " +
-      "of the sequence with the default step?",
+      "Using the GithubIssue records synced for conn-ada-github on github-prod, list the titles of open issues that are not deleted.",
+  },
+  { name: "deleted_records", prompt: "Which GithubIssue records on conn-ada-github were deleted, and when?" },
+  {
+    name: "proxy_repos",
+    prompt: "Through the Nango proxy, how many GitHub repositories can connection conn-ada-github on github-prod see?",
+  },
+  { name: "env_vars", prompt: "Which environment variables are defined in the Nango environment?" },
+  { name: "sync_models", prompt: "Which data models does each Nango sync produce, per integration?" },
+  { name: "deployed_actions", prompt: "List the Nango actions deployed for the hubspot integration." },
+  { name: "production_env", prompt: "Which Nango environments are production environments?" },
+];
+
+/** Bind-only probes: each binds the function and shows its columns without fetching (LIMIT 0). */
+export const EXECUTABLE_EXAMPLES = [
+  {
+    name: "connections_columns",
+    description: "The connections() result columns (binds only; create a nango secret and drop LIMIT 0 for rows)",
+    sql: "SELECT connection_id, provider_config_key, has_auth_error, credential_expires_at FROM nango.main.connections() LIMIT 0",
   },
   {
-    name: "stepped_sequence",
-    prompt: "List the n values of a 4-row sequence that steps by 5, in ascending order.",
-  },
-  {
-    name: "items_per_category",
-    prompt:
-      "The items API is running at https://vgi-starter-api.query-farm.services/v1. How many items does it have in each category?",
+    name: "proxy_columns",
+    description: "The proxy() result columns (binds only; create a nango secret and drop LIMIT 0 for rows)",
+    sql: "SELECT page, item_index, http_status, item FROM nango.main.proxy('conn-1', 'github', '/user') LIMIT 0",
   },
 ];
 
 export const CATALOG_TAGS: Record<string, string> = {
-  "vgi.title": "VGI Nango Worker",
-  "vgi.subtitle": "Example DuckDB functions to rename and replace: a scalar, a table function and a REST API reader.",
+  "vgi.title": "Nango Unified API",
+  "vgi.subtitle":
+    "Nango integrations, connections, syncs and records as SQL, plus read-only calls to 400+ APIs through the Nango proxy.",
   "vgi.doc_llm": CATALOG_DOC_LLM,
   "vgi.doc_md": CATALOG_DOC_MD,
   "vgi.source_url": SOURCE_URL,
   "vgi.icon_url": "https://query.farm/media-kit/products/vgi/vgi-logo.png",
   "vgi.license": "0BSD",
-  "vgi.author": "Query.Farm",
-  "vgi.copyright": "Copyright 2026 Query.Farm LLC",
-  "vgi.keywords": keywordsArray("vgi, duckdb, starter template, example worker, rest api, table function"),
+  "vgi.author": "Query Farm LLC",
+  "vgi.copyright": "Copyright 2026 Query Farm LLC - https://query.farm",
+  "vgi.keywords": keywordsArray(
+    "nango, unified api, managed oauth, auth broker, integrations, connections, syncs, records, proxy, oauth tokens, saas apis",
+  ),
   "vgi.support_contact": `${SOURCE_URL}/issues`,
   "vgi.support_policy_url": `${SOURCE_URL}#support`,
   // Public analyst tasks for `vgi-lint simulate`; private graders live in vgi-agent-tests.yaml.
   "vgi.agent_test_tasks": JSON.stringify(AGENT_TEST_TASKS),
+  "vgi.executable_examples": JSON.stringify(EXECUTABLE_EXAMPLES),
 };
 
 export const SCHEMA_TAGS: Record<string, string> = {
-  "vgi.title": "Nango Functions",
-  domain: "examples",
-  "vgi.keywords": keywordsArray("greeting, sequence, generator, rest api, pagination"),
+  "vgi.title": "Nango API",
+  domain: "integrations",
+  "vgi.keywords": keywordsArray("nango, providers, integrations, connections, syncs, records, proxy"),
   "vgi.doc_llm": SCHEMA_DOC_LLM,
   "vgi.doc_md": SCHEMA_DOC_MD,
   "vgi.categories": JSON.stringify(SCHEMA_CATEGORIES),

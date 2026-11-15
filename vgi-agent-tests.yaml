@@ -1,16 +1,45 @@
 # Private graders for the public vgi.agent_test_tasks in the worker's catalog metadata.
-# `vgi-lint lint --ai` runs an agent on each prompt and grades it with check_sql.
-# See https://github.com/Query-farm/vgi-lint-check (VGI920).
+# `vgi-lint lint --ai` runs an agent on each prompt and grades it (VGI920).
+#
+# Every nango object needs a `nango` secret pointing at a Nango environment (the offline
+# replay in test/mock_api/server.py works: SECRET_KEY 'test-secret-key', HOST its URL).
+# Replay data is static between the agent's run and the reference run, so every task
+# compares against a reference query.
 tasks:
-  - name: formal_greeting
-    reference_sql: SELECT nango.main.greet('Grace', 'formal') AS greeting
-  - name: sum_of_squares
-    reference_sql: SELECT sum(squared) AS total FROM nango.main.sequence_table(10)
-  - name: stepped_sequence
-    reference_sql: SELECT n FROM nango.main.sequence_table(4, step := 5) ORDER BY n
-  # Reads the public demo API (https://vgi-starter-api.query-farm.services/v1).
-  - name: items_per_category
-    check_sql: >-
-      SELECT count(*) = 3 AND sum(items) = 25
-      FROM (SELECT category, count(*) AS items
-            FROM nango.main.fetch_items('https://vgi-starter-api.query-farm.services/v1') GROUP BY category)
+  - name: crm_providers
+    reference_sql: SELECT name FROM nango.main.providers WHERE list_contains(categories, 'crm') ORDER BY name
+  - name: unconfigured_integrations
+    reference_sql: >-
+      SELECT unique_key, missing_fields FROM nango.main.integrations WHERE NOT is_configured ORDER BY unique_key
+  - name: broken_connections
+    reference_sql: SELECT connection_id FROM nango.main.connections() WHERE has_auth_error ORDER BY connection_id
+  - name: org_connections
+    reference_sql: >-
+      SELECT connection_id FROM nango.main.connections() WHERE organization_id = 'org_acme' ORDER BY connection_id
+  - name: token_expiry
+    reference_sql: >-
+      SELECT credential_expires_at FROM nango.main.connections() WHERE connection_id = 'conn-ada-github'
+  - name: failing_syncs
+    reference_sql: >-
+      SELECT sync_name, connection_id FROM nango.main.connection_syncs WHERE status = 'ERROR' ORDER BY ALL
+  - name: open_issues
+    reference_sql: >-
+      SELECT title FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue')
+      WHERE state = 'open' AND _nango_deleted_at IS NULL ORDER BY title
+  - name: deleted_records
+    reference_sql: >-
+      SELECT id, _nango_deleted_at FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue')
+      WHERE _nango_deleted_at IS NOT NULL ORDER BY id
+  - name: proxy_repos
+    reference_sql: >-
+      SELECT count(*) AS repos FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos', paginate := 'provider')
+  - name: env_vars
+    reference_sql: SELECT name FROM nango.main.environment_variables ORDER BY name
+  - name: sync_models
+    reference_sql: >-
+      SELECT provider_config_key, name, models FROM nango.main.syncs ORDER BY provider_config_key, name
+  - name: deployed_actions
+    reference_sql: SELECT name FROM nango.main.actions WHERE provider_config_key = 'hubspot' ORDER BY name
+  # environments needs an account API key in the nango secret (SECRET_KEY 'test-account-key' on the replay).
+  - name: production_env
+    reference_sql: SELECT name FROM nango.main.environments WHERE is_production ORDER BY name

@@ -1,38 +1,158 @@
-<!-- managed-by: vgi-starters (edit upstream in shared/README.md.tmpl, then run tools/render.py) -->
 <p align="center">
   <img src="https://query.farm/media-kit/products/vgi/vgi-logo.png" alt="Vector Gateway Interface (VGI)" width="320">
 </p>
 
-<p align="center"><em>A Query.Farm VGI worker for DuckDB, written in TypeScript.</em></p>
+<p align="center"><em>A Query.Farm VGI worker for DuckDB.</em></p>
 
-# VGI Nango Worker — TypeScript
+# Query 400+ SaaS APIs Through Nango's Managed OAuth in DuckDB
+
+> **vgi-nango** · a [Query.Farm](https://query.farm) VGI worker · written in TypeScript
 
 [![CI](https://github.com/Query-farm/vgi-nango/actions/workflows/ci.yml/badge.svg)](https://github.com/Query-farm/vgi-nango/actions/workflows/ci.yml)
 [![vgi worker: query.farm](https://query.farm/media-kit/shields/vgi-worker.svg)](https://query.farm)
 
-[VGI](https://query.farm/vgi) lets DuckDB call functions that live in a separate
-process: your code, in any language, exposed as ordinary SQL. This worker adds
-three example functions that you rename and replace with your own:
+[Nango](https://nango.dev) is an open-source unified API and managed-OAuth platform: it
+holds and refreshes your users' credentials for 400+ APIs. This worker uses Nango as an
+auth broker for DuckDB, read-only. You can audit the integration setup, read the records
+Nango syncs stored, and call any brokered API through the Nango proxy. DuckDB only ever
+holds your Nango secret key. Tokens stay in Nango.
 
-| Function | Kind | Shows you how to |
-|---|---|---|
-| `greet(name)` / `greet(name, style)` | scalar | vectorize over a column, overload, constrain a constant |
-| `sequence_table(count, step := 1)` | table | stream rows in batches, take named arguments |
-| `fetch_items(base_url, page_size := 100)` | table | page through a REST API, retry, read a secret |
+```sql
+CREATE SECRET nango (TYPE nango, SECRET_KEY 'nango-secret-key…');
 
+-- Connections whose OAuth tokens are broken or about to expire.
+SELECT connection_id, provider, organization_id, credential_expires_at
+FROM nango.main.connections()
+WHERE has_auth_error OR credential_expires_at < now() + INTERVAL 1 DAY;
 
-## Quick start
+-- What a GitHub issues sync stored, changed in the last week (pushed down as modified_after).
+SELECT number, title, state, _nango_last_action
+FROM nango.main.records('github', 'user-42', 'GithubIssue')
+WHERE _nango_last_modified_at > now() - INTERVAL 7 DAY;
 
-**Prerequisites:** [Bun](https://bun.sh) 1.3+ and [uv](https://docs.astral.sh/uv/) (it runs the SQL
-test runner and the metadata checker).
-
-```bash
-make build
+-- Any API Nango brokers, read-only: every repo the user can see, following Link-header pages.
+SELECT item->>'full_name' AS repo, (item->>'stargazers_count')::INT AS stars
+FROM nango.main.proxy('user-42', 'github', '/user/repos', paginate := 'provider')
+ORDER BY stars DESC;
 ```
 
-Then open DuckDB 2.0 or [Haybarn](https://query.farm/products/haybarn) and attach the
-worker. `LOCATION` is the command DuckDB runs to start it; use an absolute path,
-because a relative one resolves against DuckDB's working directory.
+## Functions and tables
+
+All live in `nango.main`. "integration" means the same thing as `provider_config_key` and
+`integrations.unique_key` everywhere.
+
+| Object | Kind | What it returns |
+|---|---|---|
+| `providers` | table | Nango's provider catalog: `name`, `auth_mode`, `categories VARCHAR[]`, `docs`, `proxy_base_url`, default `proxy_paginate` |
+| `integrations` | table | Configured integrations: `unique_key`, `provider`, timestamps, `missing_fields`, `is_configured` (client secrets are never requested) |
+| `connections(tags := NULL, page_size := 100)` | table function | One row per connection: `connection_id`, `provider_config_key`, `end_user_id` / `end_user_email` / `organization_id` tags, `tags`, `metadata`, `errors STRUCT(type, log_id)[]`, `has_auth_error`, and the detail columns `credential_type`, `credential_expires_at`, `updated_at` and `last_fetched_at` |
+| `syncs` | table | Deployed syncs: `models`, `runs`, `enabled`, `auto_start`, `track_deletes`, `json_schema` |
+| `actions` | table | Deployed actions, listed only (never triggered) |
+| `connection_syncs` | table | Sync status per connection: `status`, `finished_at`, `next_scheduled_sync_at`, `total_records`, latest run's added/updated/deleted |
+| `environment_variables` | table | Variable `name` and `is_set` only (values are never returned) |
+| `environments` | table | The account's environments (needs an **account** API key) |
+| `records(integration, connection_id, model, modified_after := NULL, filter := NULL, variant := NULL, page_size := 100)` | table function | The records a sync stored, typed from the model's JSON Schema |
+| `proxy(connection_id, provider_config_key, path, method := 'GET', params := NULL, headers := NULL, response_path := NULL, paginate := NULL, max_pages := 100)` | table function | `page`, `item_index`, `http_status`, `item JSON`, one row per element at `response_path` |
+
+### Pushdown
+
+Every function re-applies the pushed filters exactly, so translation only ever narrows
+what Nango returns.
+
+| Object | SQL | Nango parameter |
+|---|---|---|
+| `providers` | `name = / IN` | `GET /providers/{name}` per value |
+| `integrations` | `unique_key = / IN` | `GET /integrations/{key}` per value |
+| `connections()` | `connection_id =` | `connectionId` |
+| `connections()` | `end_user_id`, `end_user_email`, `organization_id =`, and `tags :=` | `tags[<key>]=…` |
+| `connections()` | detail columns projected or filtered | one `GET /connections/{id}?refresh_token=false` per row (skipped otherwise) |
+| `connection_syncs` | `provider_config_key = / IN`, `connection_id =`, `sync_name = / IN` | integrations read, `connection_id`, `syncs=a,b` |
+| `records()` | `_nango_last_modified_at > / >=` (and `modified_after :=`) | `modified_after` (1 ms earlier: Nango compares strictly) |
+| `records()` | `_nango_last_action = / IN` (and `filter :=`) | `filter=added,deleted` |
+| `records()` | `id = / IN` (≤ 100 values) | `ids` |
+| `environments` | `name =` | `name` |
+
+### Record columns
+
+When the deployed sync has a JSON Schema for the model (`syncs.json_schema`), each model
+property becomes its own column. `string` maps to `VARCHAR`, and `string` with
+`format: date-time` maps to `TIMESTAMPTZ`. `integer` maps to `BIGINT`, `number` to
+`DOUBLE`, `boolean` to `BOOLEAN`, and an array of strings to `VARCHAR[]`. Objects,
+other arrays and `$ref`s become `JSON`. `null` in a type union only makes the column
+nullable. Without a schema, the result is the hoisted `id` plus the payload as
+`_record` JSON (`_record->>'field'`). Every row ends with `_nango_last_action`,
+`_nango_last_modified_at`, `_nango_first_seen_at`, `_nango_deleted_at`,
+`_nango_pruned_at`, `_nango_cursor` and `_record`. Deleted records are included; filter
+`_nango_deleted_at IS NULL` for live ones.
+
+### The proxy
+
+`proxy()` sends `GET <host>/proxy/<path>` with `Connection-Id` and `Provider-Config-Key`.
+Nango injects that connection's credential, refreshing it first if needed, and forwards
+the call to the provider's base URL. `headers := '{"X-Foo": "1"}'` is sent as
+`Nango-Proxy-X-Foo`, which Nango passes upstream as `X-Foo`. `params` is a JSON object;
+an array value repeats the key.
+
+- **Read-only.** `method` accepts `GET` (default) and `HEAD`. `POST`, `PUT`, `PATCH`
+  and `DELETE` are rejected at bind and again before any request, because the worker
+  never mutates an upstream service. `HEAD` returns one row whose `item` is the
+  response headers.
+- **Rows.** `response_path` is a dotted path (`data.items`) or a JSON pointer
+  (`/data/items`). An array yields one row per element. An object yields one row.
+- **Pagination** mirrors Nango's proxy `paginate` config and its field names:
+  - `cursor`: `cursor_path_in_response` → `cursor_name_in_request`
+  - `link`: the `Link` header's `link_rel_in_response_header` (default `next`), or
+    `link_path_in_response_body`
+  - `offset`: `offset_name_in_request` with `offset_start_value`, and
+    `offset_calculation_method` set to `per-page` or `by-response-size` (the default)
+  - `limit` + `limit_name_in_request` and `response_path` work as in Nango.
+  - `paginate := 'provider'` uses the provider's default from the catalog
+    (`providers.proxy_paginate`).
+
+  A scan stops at an empty page, a short offset page, a missing cursor or link, or
+  `max_pages`. An absolute next link must start with the provider's `proxy_base_url`.
+  The connection's credential is never sent to a host that a response names. The next
+  request is kept in the scan state, so long scans resume over the HTTP transport.
+
+## Authentication
+
+```sql
+-- Nango Cloud
+CREATE SECRET nango (TYPE nango, SECRET_KEY 'nango-environment-secret-key');
+-- Self-hosted Nango
+CREATE SECRET nango (TYPE nango, SECRET_KEY '…', HOST 'https://nango.internal.example.com');
+```
+
+`SECRET_KEY` is an environment secret key, sent as `Authorization: Bearer …`. `HOST`
+defaults to `https://api.nango.dev`. It must be `https://`; plain `http://` is accepted
+only for `localhost` / `127.0.0.1`. The `environments` table is account-level and needs
+an account API key in `SECRET_KEY`. The key is read from the secret on every call and
+never stored in scan state.
+
+**Secrets never leak.**
+
+- `connections()` reads `GET /connections/{id}` (with `refresh_token=false`) only when a
+  detail column is needed. It reduces the response to the credential type, expiry and
+  timestamps before a row is built. Access and refresh tokens, API keys and
+  `connection_config` are dropped.
+- Integrations are read without `include=credentials`.
+- Environment variable values are dropped.
+
+## Rate limits and retries
+
+HTTP 429 from Nango or an upstream API that Nango passes back through the proxy waits
+for `Retry-After` (seconds or a date) or `X-RateLimit-Reset`, up to 65 s. 5xx and
+network errors retry with exponential backoff, up to 5 attempts. Every request has a
+30 s timeout.
+
+## Install
+
+**Prerequisites:** [Bun](https://bun.sh) 1.3+ (for a source checkout).
+
+```bash
+git clone --branch v0.1.0 https://github.com/Query-farm/vgi-nango.git && cd vgi-nango
+bun install --frozen-lockfile
+```
 
 **DuckDB 2.0:**
 
@@ -52,244 +172,56 @@ LOAD vgi;
 ATTACH 'nango' (TYPE vgi, LOCATION '/abs/path/to/vgi-nango/bin/vgi-nango-worker');
 ```
 
-Now call the functions:
-
-```sql
-SELECT nango.main.greet('Ada');                         -- Hi, Ada!
-SELECT nango.main.greet('Ada', 'formal');               -- Good day, Ada.
-SELECT * FROM nango.main.sequence_table(5, step := 2) ORDER BY n;
-```
-
-`fetch_items` pages through a REST API. Try it against the public demo API (25 fixed items):
-
-```sql
-SELECT category, count(*) AS items, round(avg(price), 2) AS avg_price
-FROM nango.main.fetch_items('https://vgi-starter-api.query-farm.services/v1')
-GROUP BY category ORDER BY category;
-```
-
-If an older cached extension misbehaves, refresh it with `FORCE INSTALL vgi FROM query_farm;`
-(DuckDB) or `FORCE INSTALL vgi FROM community;` (Haybarn).
-
-## Using it in a pipeline
-
-Worker functions compose with everything else in DuckDB:
-
-```sql
--- Materialize an API into a local table.
-CREATE TABLE items AS SELECT * FROM nango.main.fetch_items('https://vgi-starter-api.query-farm.services/v1');
-
--- Join it with local files.
-SELECT i.name, i.price, s.units
-FROM items i JOIN 'sales.parquet' s ON s.item_id = i.id;
-
--- Call a scalar per row of another table.
-SELECT customer, nango.main.greet(customer, 'formal') FROM read_csv('customers.csv');
-```
-
-## Project layout
-
-```
-src/
-  worker.ts        # entry point: serves the catalog over stdio, --unix or --http
-  catalog.ts       # assembles the catalog; add new functions to FUNCTIONS
-  meta.ts          # catalog/schema metadata + helpers (objectTags, column)
-  greet.ts         # scalar example (overloads, const param with choices)
-  sequence.ts      # table function example (named args, streaming state)
-  fetch_items.ts   # REST API table function (pagination, retries, secrets)
-  cli.ts           # flag parsing: stdio / --unix / --http (PORT:<n>, /health)
-  log.ts           # stderr logger
-bin/               # vgi-nango-worker (what DuckDB launches) and run-recipe
-tests/             # bun unit tests (worker subprocess + mock API)
-test/sql/          # sqllogictest files run through DuckDB
-test/mock_api/     # offline mock of the REST API used by tests
-examples/          # recipes: pushdown, caching, catalog tables, aggregates, COPY …
-ci/                # integration harness used by `make test-sql` and CI
-scripts/           # vgi_template.py (init / template-diff)
-vgi-agent-tests.yaml  # private graders for the agent test tasks
-```
-
-## Adding a function
-
-1. Create `src/<name>.ts`. Copy the closest example: `greet.ts` for a scalar,
-   `sequence.ts` for a generator, `fetch_items.ts` for an API.
-2. Declare arguments: `params` + `argDocs` (scalars), or the ordered `parameters`
-   list when a constant needs `choices`/`ge`/`le`. Table functions use `args`,
-   `argDocs` and `argConstraints`; an argument listed in `argDefaults` becomes a
-   named argument (`step := 2`), the others are positional.
-3. Give it `description`, `tags: objectTags(...)` (from `src/meta.ts`) and
-   `examples`.
-4. Add it to `FUNCTIONS` in `src/catalog.ts`.
-
-**Which kind of function?**
-
-| You want to… | Use |
-|---|---|
-| compute one value per input row | a **scalar** function |
-| return a set of rows from arguments (an API, a file, a generator) | a **table** function |
-| transform or aggregate the rows of a query | a **table in-out** function or an **aggregate** |
-| expose a fixed dataset by name (`SELECT * FROM nango.main.t`) | a **catalog table** |
-| write data out to a file or service | `COPY … TO` with a copy function |
-| accept `INSERT` / `UPDATE` / `DELETE` | a catalog table with insert/update/delete functions |
-
-The [examples/](examples/) folder has a recipe for most of these. Writable tables have no
-recipe:
-
-A writable table is a `TableDescriptor` that names a table in-out function per operation in
-`insertFunction`, `updateFunction` and `deleteFunction`, with the richest result each one
-produces in `writeResultModes`. `writeOptions`, `writeResultSchema`, `writeResultBatch` and
-`rowIdField` (all exported by `@query-farm/vgi`) read DuckDB's `write_options` argument and
-build the result. UPDATE and DELETE need the table's scan `function` to emit `rowIdField()` and
-support projection pushdown. Transactions: return `supports_transactions` from the catalog's
-attach and override `transactionBegin` / `transactionCommit` / `transactionRollback`.
-Since VGI protocol 3.3 a table's scan and write functions are table-only: hidden from
-`duckdb_functions()` and not callable from SQL. Set `exposeScan: true` on the table to keep the
-scan callable as an ordinary table function too (write functions never are).
-[`examples/simple-writable-worker.ts`](https://github.com/Query-farm/vgi-typescript/blob/main/examples/simple-writable-worker.ts)
-and `examples/writable-tx-worker.ts` in vgi-typescript are complete workers.
-
-## Secrets and configuration
-
-`fetch_items` shows the recommended pattern. A bearer token comes from a DuckDB secret
-when one exists, and from an environment variable otherwise:
-
-```sql
-CREATE SECRET (TYPE nango_api, TOKEN 'your-token');      -- per session, never logged
-```
-
-```bash
-NANGO_API_TOKEN=your-token make run-http                # for servers and containers
-```
-
-Try it: the demo API's `/v1/auth` endpoint needs the published token `demo-token`.
-
-```sql
-SELECT count(*) FROM nango.main.fetch_items('https://vgi-starter-api.query-farm.services/v1/auth');   -- fails: HTTP 401
-CREATE SECRET (TYPE nango_api, TOKEN 'demo-token');
-SELECT count(*) FROM nango.main.fetch_items('https://vgi-starter-api.query-farm.services/v1/auth');   -- 25
-```
-
-Never bake credentials into the image or the source. If a function can't run without
-real credentials, its examples can't execute in CI either. Set `execute: false` on the
-metadata check for that worker (see `.github/workflows/ci.yml`), and add
-`LINT_ARGS ?= --no-execute` to the Makefile so local runs match.
+`LOCATION` is the command DuckDB runs, so use an absolute path. Tagged releases ship
+signed standalone executables (no Bun needed) for Linux, macOS (arm64) and Windows.
+Point `LOCATION` at the downloaded binary. The same binary serves HTTP with
+`--http --port 8000` (see the `Dockerfile`).
 
 ## Testing
 
 ```bash
-make test-unit                 # fast TypeScript unit tests
-make test-sql                  # test/sql/*.test through DuckDB (stdio)
+make test-unit                 # bun unit tests (pushdown, schema typing, pagination, link safety, retries)
+make test-sql                  # test/sql/nango.test through Haybarn 2.0 (stdio)
 make test-sql TRANSPORT=http   # …over HTTP (also: launch)
 make check                     # everything CI runs
 ```
 
-`test/sql/*.test` files are [sqllogictest](https://duckdb.org/docs/stable/dev/sqllogictest/intro)
-scripts. `ci/run-integration.sh` runs them against your worker and fails on any
-unexpected skip, so a broken transport can't hide behind a green run.
-`fetch_items` is tested against `test/mock_api/server.py` so tests are fast and
-offline.
+No test touches the network or a real Nango account. `test/mock_api/server.py` is a
+stdlib-only replay of the Nango API, serving a hand-built environment
+(`test/fixtures/nango-env.json`) in the response shapes of Nango's
+[OpenAPI spec](https://github.com/NangoHQ/nango/blob/master/docs/spec.yaml). It:
 
-**Testing against real data:** put live tests in their own `.test` file that starts with
-`require-env NANGO_LIVE`. They run only when that variable is set. Add the skip reason
-to `EXPECTED_SKIP_REASONS` in CI.
+- checks the Bearer key, and allows `/environments` only with an account key;
+- rejects unknown query parameters;
+- pages `/connections` (`limit` + `page`) and `/records` (`cursor`, with
+  `modified_after` / `filter` / `ids`);
+- answers a 429 and a 503 once each, so the retry paths always run.
 
-## Metadata and the quality score
+Its `/proxy` route resolves the connection from `Connection-Id` + `Provider-Config-Key`.
+It forwards `Nango-Proxy-*` headers and the connection's credential to a **fake
+upstream API**. That upstream verifies that the credential belongs to a connection of
+the right provider and serves Link-header, cursor and offset pagination plus an
+upstream 429. The SQL tests read the replay's `/__requests` log to check exactly what
+was pushed down and which connection the upstream saw.
 
-DuckDB, agents and documentation tools discover your functions through their metadata:
-titles, descriptions, argument docs, examples and keywords.
-[vgi-lint](https://github.com/Query-farm/vgi-lint-check) checks it, and CI runs it on
-every push. Its settings live in `vgi-lint.toml`, which `make lint-explain`,
-`vgi-lint lint`, and CI all read. This template scores 100/100 with no findings.
+A self-hosted Nango in Docker was not used for testing. Its stack (server, Postgres,
+Redis, and a registered OAuth app for any real provider) adds weight without making
+offline tests more faithful than the spec-shaped replay.
 
-```bash
-make lint-explain                              # findings, each with its fix
-make lint-explain LINT_ARGS="--format agent"   # the same, grouped for coding agents
-make lint-ai                                   # optional: an agent must solve vgi-agent-tests.yaml
-```
+The metadata check runs with `execute: false` in CI, because every object needs a
+`nango` secret for a live environment.
 
-Each report also states an **assurance level**: how much was actually verified.
+## Nango's license
 
-| Level | Reached when | Here |
-|---|---|---|
-| L1 structural | the static metadata is clean | workers that need real credentials (`execute: false` in CI) |
-| L2 behavioural | the examples also run and return what they claim | **the CI gate** |
-| L3 semantic | an agent solves the worker's own test tasks, and the docs are reviewed | `make lint-ai`, before publishing |
+This worker is a client of the Nango API. It contains no Nango code. The Nango server,
+including self-hosted deployments, is licensed by Nango under the
+[Elastic License 2.0 (ELv2)](https://github.com/NangoHQ/nango/blob/master/LICENSE).
+ELv2 allows self-hosting for your own use but forbids offering Nango to third parties as
+a hosted or managed service. Check Nango's terms for your deployment.
 
-- **How strict.** Your copy fails on warnings (`fail_on = "warning"` in `vgi-lint.toml`).
-  Raise it to `"info"` before you publish the worker for others.
-- **The linter isn't pinned.** It tracks the current quality bar, so a new rule can flag
-  metadata that passed yesterday. Fix it, or waive the finding.
-- **Waivers.** If a finding is genuinely wrong for your worker, waive it in
-  `vgi-lint.toml` with a `kind` and a `reason`.
-- **Existing workers.** If you're adding this gate to a worker that already has
-  findings, record them with `vgi-lint lint --baseline vgi-lint-baseline --update-baseline`
-  and set `baseline` in `vgi-lint.toml`. After that, only new findings fail.
+## Authorship & License
 
-Metadata lives in `src/meta.ts` and the `tags`/`examples` of each function.
+Written by [Query.Farm](https://query.farm). Released under the
+[BSD Zero Clause License](LICENSE) (0BSD).
 
-## Logging and debugging
-
-stdout carries the Arrow protocol, so **never print to stdout**. Log to stderr instead.
-Use `log` from `src/log.ts` (it writes to stderr); `--debug` or `--log-level debug` turns it up and also enables the SDK's own tracing (`VGI_DEBUG`).
-
-- Under DuckDB (stdio/launch), worker stderr shows up in DuckDB's error messages and
-  terminal.
-- In Docker it goes to `docker logs`.
-- `make debug` runs one query against the worker with debug logging on.
-
-## Deploying
-
-The same binary serves stdio (DuckDB starts it locally) or HTTP (you host it):
-
-```bash
-docker build -t weather-worker .
-docker run -p 8000:8000 -e NANGO_API_TOKEN=... weather-worker   # health: GET /health
-```
-
-```sql
-ATTACH 'nango' (TYPE vgi, LOCATION 'https://workers.example.com/nango');
-```
-
-Put hosted workers behind TLS and authentication. See
-[authentication](https://query.farm/vgi/authentication) for bearer tokens and JWTs, and
-[distributing a worker](https://query.farm/vgi/distributing-a-worker) for packaging.
-Pass secrets with `-e` or your platform's secret manager.
-
-## Releasing
-
-Push a tag like `v0.1.0`. The release workflow compiles the worker with `bun build --compile` into a standalone executable for Linux (x86-64, arm64), macOS (arm64) and Windows (x86-64), and attaches the archives to the GitHub release. Users download one file and point `LOCATION` at it, with no Bun or `node_modules` on the host. Every artifact is signed with cosign and
-carries SLSA build provenance. `ci/check-version.sh` makes sure the tag matches the
-version in `package.json`.
-
-## Using with coding agents
-
-[AGENTS.md](AGENTS.md) is written for AI coding agents (Claude Code reads it via
-`CLAUDE.md`; Codex, Cursor and others read it directly). It covers the commands, the
-recipe for adding a function, the metadata checklist and the sharp edges. A good first
-prompt:
-
-> Read AGENTS.md. Replace `fetch_items` with `forecast(lat DOUBLE, lon DOUBLE)` that calls
-> the Open-Meteo API. Include full metadata, a mock-server test and a `NANGO_LIVE` test.
-> You're done when `make check` passes.
-
-## Keeping up with the template
-
-`make template-diff` shows what changed upstream (CI, docs, examples) since your copy was
-made. Your copy records its template version in `.vgi-nango.json`.
-
-## Learn more
-
-- [What is VGI?](https://query.farm/vgi) · [Getting started](https://query.farm/vgi/getting-started) · [Building a worker](https://query.farm/vgi/building-a-worker)
-- [TypeScript SDK docs](https://query.farm/vgi/docs/typescript/): [scalar tutorial](https://query.farm/vgi/docs/typescript/tutorial/scalar/), [table tutorial](https://query.farm/vgi/docs/typescript/tutorial/table/)
-- [Distributing a worker](https://query.farm/vgi/distributing-a-worker) · [Choosing a language](https://query.farm/vgi/languages) · [llms.txt](https://query.farm/vgi/llms.txt)
-- SDK source: [@query-farm/vgi](https://github.com/Query-farm/vgi-typescript) · RPC layer: [https://vgi-rpc-typescript.query.farm](https://vgi-rpc-typescript.query.farm)
-
-## Support
-
-Open an issue on this repository. For VGI itself, see [query.farm](https://query.farm).
-
-## Authorship & license
-
-The starter template is written by [Query.Farm](https://query.farm) and released under
-the [BSD Zero Clause License](LICENSE) (0BSD). Use it for anything, with no attribution
-required. Replace this section with your own license once the code is yours.
+Copyright 2026 Query Farm LLC - https://query.farm

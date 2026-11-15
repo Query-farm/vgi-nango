@@ -2,7 +2,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A VGI worker for DuckDB, generated from the Query.Farm VGI starter template.",
+  "description": "Nango (unified API / managed OAuth) as SQL for DuckDB: integrations, connections, syncs, records and a read-only proxy.",
   "license": "0BSD",
   "scripts": {
     "typecheck": "tsc --noEmit",

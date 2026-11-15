@@ -25,16 +25,19 @@ src/
   worker.ts        # entry point: serves the catalog over stdio, --unix or --http
   catalog.ts       # assembles the catalog; add new functions to FUNCTIONS
   meta.ts          # catalog/schema metadata + helpers (objectTags, column)
-  greet.ts         # scalar example (overloads, const param with choices)
-  sequence.ts      # table function example (named args, streaming state)
-  fetch_items.ts   # REST API table function (pagination, retries, secrets)
+  nango/client.ts   # nango secret -> Bearer auth, HOST, 429/5xx retries
+  nango/pushdown.ts # SQL filters -> Nango query parameters (narrowing only)
+  nango/table.ts    # the generic listing table function + catalog-table helper
+  nango/resources.ts# providers, integrations, connections, syncs, actions, connection_syncs, env
+  nango/records.ts  # records(): JSON-Schema-typed columns, next_cursor paging, pushdown
+  nango/proxy.ts    # proxy(): GET/HEAD only, Nango-style cursor/link/offset pagination
   cli.ts           # flag parsing: stdio / --unix / --http (PORT:<n>, /health)
   log.ts           # stderr logger
-bin/               # vgi-nango-worker (what DuckDB launches) and run-recipe
+bin/               # vgi-nango-worker (what DuckDB launches)
 tests/             # bun unit tests (worker subprocess + mock API)
 test/sql/          # sqllogictest files run through DuckDB
-test/mock_api/     # offline mock of the REST API used by tests
-examples/          # recipes: pushdown, caching, catalog tables, aggregates, COPY …
+test/mock_api/     # offline Nango replay (strict params, paging, 429) + fake upstream behind /proxy
+test/fixtures/     # the hand-built Nango environment (documented response shapes)
 ci/                # integration harness used by `make test-sql` and CI
 scripts/           # vgi_template.py (init / template-diff)
 vgi-agent-tests.yaml  # private graders for the agent test tasks
@@ -42,8 +45,8 @@ vgi-agent-tests.yaml  # private graders for the agent test tasks
 
 ## Recipe: add a function
 
-1. Create `src/<name>.ts`. Copy the closest example: `greet.ts` for a scalar,
-   `sequence.ts` for a generator, `fetch_items.ts` for an API.
+1. Add a spec to `src/nango/resources.ts` (a listing) or a module next to
+   `records.ts` / `proxy.ts` (a table function with its own arguments).
 2. Declare arguments: `params` + `argDocs` (scalars), or the ordered `parameters`
    list when a constant needs `choices`/`ge`/`le`. Table functions use `args`,
    `argDocs` and `argConstraints`; an argument listed in `argDefaults` becomes a

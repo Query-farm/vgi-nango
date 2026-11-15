@@ -1,148 +1,538 @@
 # name: test/sql/nango.test
-# description: SQL-level tests for the nango worker, run through DuckDB by ci/run-integration.sh
+# description: SQL tests for the nango worker against the offline Nango replay (test/mock_api/server.py)
 # group: [nango]
-# managed-by: vgi-starters (edit upstream in shared/, then run tools/render.py)
 
 require vgi
 
 require-env NANGO_WORKER
 
-require-env NANGO_MOCK_API
+require-env NANGO_FIXTURE_URL
 
-require-env NANGO_MOCK_API_AUTH
+# httpfs + json read the replay server's /__requests log to assert what was pushed down.
+statement ok
+LOAD httpfs;
+
+statement ok
+LOAD json;
+
+# (No ICU in the test runner: TIMESTAMPTZ values print in UTC.)
 
 statement ok
 ATTACH 'nango' (TYPE vgi, LOCATION '{NANGO_WORKER}');
 
-# ---------------------------------------------------------------- greet (scalar)
+# ---------------------------------------------------------------- secret errors
 
-query T
-SELECT nango.main.greet('Ada');
-----
-Hi, Ada!
-
-query T
-SELECT nango.main.greet('Ada', 'formal');
-----
-Good day, Ada.
-
-# NULL in, NULL out.
-query T
-SELECT nango.main.greet(NULL);
-----
-NULL
-
-# Works over a whole column, one result per row.
-query T
-SELECT nango.main.greet(name) FROM (VALUES ('Ada'), ('Grace'), (NULL)) AS t(name) ORDER BY ALL NULLS LAST;
-----
-Hi, Ada!
-Hi, Grace!
-NULL
-
-# `style` is constrained to 'casual' | 'formal' and checked when the query is bound.
-# (No expected message: each SDK words constraint errors its own way.)
 statement error
-SELECT nango.main.greet('Ada', 'loud');
+SELECT count(*) FROM nango.main.integrations;
 ----
-<REGEX>:.*
+<REGEX>:.*no nango secret.*
 
-# ------------------------------------------------------ sequence_table (table fn)
+statement ok
+CREATE SECRET nango_bad (TYPE nango, SECRET_KEY 'wrong-key', HOST '{NANGO_FIXTURE_URL}');
 
-query II
-SELECT n, squared FROM nango.main.sequence_table(4) ORDER BY n;
+statement error
+SELECT count(*) FROM nango.main.environment_variables;
 ----
-0	0
-1	1
-2	4
-3	9
+<REGEX>:.*HTTP 401.*unknown_account.*
 
-# Named argument with a default.
+statement ok
+DROP SECRET nango_bad;
+
+statement ok
+CREATE SECRET nango_insecure (TYPE nango, SECRET_KEY 'x', HOST 'http://nango.example.com');
+
+statement error
+SELECT count(*) FROM nango.main.environment_variables;
+----
+<REGEX>:.*https.*
+
+statement ok
+DROP SECRET nango_insecure;
+
+statement ok
+CREATE SECRET nango_fixture (TYPE nango, SECRET_KEY 'test-secret-key', HOST '{NANGO_FIXTURE_URL}');
+
+# -------------------------------------------------------------------- providers
+
+# The first GET /providers is a 503; the worker retries.
+query TTTT
+SELECT name, auth_mode, categories, proxy_paginate->>'type' FROM nango.main.providers ORDER BY name;
+----
+github	OAUTH2	[dev-tools, ticketing]	link
+hubspot	OAUTH2	[marketing, support, crm]	cursor
+pipedrive	API_KEY	[crm]	offset
+slack	OAUTH2	[communication]	NULL
+stripe	API_KEY	[payment, accounting]	NULL
+
+query T
+SELECT name FROM nango.main.providers WHERE list_contains(categories, 'crm') ORDER BY name;
+----
+hubspot
+pipedrive
+
+# name = / IN reads only those providers.
+query TT
+SELECT name, display_name FROM nango.main.providers WHERE name IN ('hubspot', 'nope') ORDER BY name;
+----
+hubspot	HubSpot
+
 query I
-SELECT n FROM nango.main.sequence_table(3, step := 5) ORDER BY n;
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/providers/') WHERE path IN ('/providers/hubspot', '/providers/nope');
+----
+2
+
+# ----------------------------------------------------------------- integrations
+
+# The first GET /integrations is a 429 with Retry-After; the worker waits and retries.
+query TTTT
+SELECT unique_key, provider, is_configured, missing_fields FROM nango.main.integrations ORDER BY unique_key;
+----
+github-prod	github	true	[]
+hubspot	hubspot	true	[]
+pipedrive-crm	pipedrive	true	[]
+slack-bot	slack	false	[oauth_client_secret]
+
+query TT
+SELECT i.unique_key, p.auth_mode FROM nango.main.integrations i JOIN nango.main.providers p ON p.name = i.provider WHERE i.unique_key = 'pipedrive-crm';
+----
+pipedrive-crm	API_KEY
+
+# Integration client secrets are never requested.
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/integrations') WHERE query LIKE '%include%';
 ----
 0
+
+# ------------------------------------------------------------------ connections
+
+query TTTTT
+SELECT connection_id, provider_config_key, end_user_id, organization_id, has_auth_error FROM nango.main.connections() ORDER BY connection_id;
+----
+conn-acme-hubspot	hubspot	u_ada	org_acme	false
+conn-acme-pipedrive	pipedrive-crm	NULL	org_acme	false
+conn-ada-github	github-prod	u_ada	org_acme	false
+conn-grace-github	github-prod	u_grace	org_globex	true
+conn-ops-slack	slack-bot	NULL	NULL	false
+
+query TT
+SELECT connection_id, errors FROM nango.main.connections() WHERE len(errors) > 0 ORDER BY connection_id;
+----
+conn-acme-hubspot	[{'type': sync, 'log_id': log_sync_hubspot}]
+conn-grace-github	[{'type': auth, 'log_id': log_auth_grace}]
+
+# Without detail columns there is no per-connection call.
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/connections/');
+----
+0
+
+# Detail columns: credential type and expiry, one GET /connections/{id} per row.
+query TTTT
+SELECT connection_id, credential_type, credential_expires_at, last_fetched_at FROM nango.main.connections() ORDER BY connection_id;
+----
+conn-acme-hubspot	OAUTH2	2026-11-15 12:00:00+00	2026-11-14 10:00:00+00
+conn-acme-pipedrive	API_KEY	NULL	2026-11-12 08:00:00+00
+conn-ada-github	OAUTH2	2026-12-01 00:00:00+00	2026-11-14 22:00:00+00
+conn-grace-github	OAUTH2	2026-10-02 00:00:00+00	2026-10-01 09:00:00+00
+conn-ops-slack	OAUTH2	NULL	2026-05-22 14:00:00+00
+
+# ... asked without the refresh token.
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/connections/') WHERE query LIKE '%"refresh_token": "false"%';
+----
 5
-10
 
-# Larger than one batch: the cursor must carry across process calls.
-query II
-SELECT count(*), max(n) FROM nango.main.sequence_table(25000);
-----
-25000	24999
-
+# Tokens never reach a row, whatever is selected.
 query I
-SELECT count(*) FROM nango.main.sequence_table(0);
+SELECT count(*) FROM (SELECT to_json(c)::VARCHAR AS j FROM nango.main.connections() c) WHERE j LIKE '%SECRET%';
 ----
 0
 
-# count is constrained to [0, 1000000].
-statement error
-SELECT * FROM nango.main.sequence_table(-1);
+# Filtering on a detail column fetches the details too (they are re-checked exactly).
+query T
+SELECT connection_id FROM nango.main.connections() WHERE credential_type = 'API_KEY';
 ----
-<REGEX>:.*
+conn-acme-pipedrive
 
-# Named arguments are constrained too: step >= 1.
-statement error
-SELECT * FROM nango.main.sequence_table(3, step := 0);
+# Tag columns push down into tags[...]; paging by limit + page.
+query T
+SELECT connection_id FROM nango.main.connections(page_size := 2) WHERE organization_id = 'org_acme' ORDER BY ALL;
 ----
-<REGEX>:.*
+conn-acme-hubspot
+conn-acme-pipedrive
+conn-ada-github
 
-# ------------------------------------------------- fetch_items (REST table fn)
+query T
+SELECT query FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/connections') WHERE path = '/connections' ORDER BY seq DESC LIMIT 1;
+----
+{"limit": "2", "page": "1", "tags[organization_id]": "org_acme"}
 
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/connections') WHERE path = '/connections' AND query LIKE '%"limit": "2"%';
+----
+2
+
+# tags := filters server-side; connection_id = becomes connectionId.
+query T
+SELECT connection_id FROM nango.main.connections(tags := '{"end_user_id": "u_ada"}') ORDER BY ALL;
+----
+conn-acme-hubspot
+conn-ada-github
+
+query T
+SELECT provider FROM nango.main.connections() WHERE connection_id = 'conn-ops-slack';
+----
+slack
+
+query T
+SELECT query FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/connections') WHERE path = '/connections' ORDER BY seq DESC LIMIT 1;
+----
+{"connectionId": "conn-ops-slack", "limit": "100", "page": "0"}
+
+statement error
+SELECT * FROM nango.main.connections(tags := 'not json');
+----
+<REGEX>:.*tags must be a JSON object.*
+
+# ------------------------------------------------------------- syncs & actions
+
+query TTTTT
+SELECT provider_config_key, name, models, runs, (json_schema IS NOT NULL)::VARCHAR FROM nango.main.syncs ORDER BY ALL;
+----
+github-prod	github-issues	[GithubIssue]	every 30 minutes	true
+github-prod	github-repos	[GithubRepo]	every day	false
+hubspot	hubspot-contacts	[HubspotContact]	every hour	true
+
+query TTT
+SELECT provider_config_key, name, models FROM nango.main.actions ORDER BY ALL;
+----
+github-prod	create-issue	[GithubIssue]
+hubspot	fetch-properties	[HubspotProperty]
+
+# ------------------------------------------------------------------ sync status
+
+query TTTTI
+SELECT provider_config_key, connection_id, sync_name, status, total_records FROM nango.main.connection_syncs ORDER BY ALL;
+----
+github-prod	conn-ada-github	github-issues	SUCCESS	5
+github-prod	conn-ada-github	github-repos	RUNNING	3
+github-prod	conn-grace-github	github-issues	ERROR	0
+hubspot	conn-acme-hubspot	hubspot-contacts	PAUSED	3
+
+query TIII
+SELECT sync_name, last_added, last_updated, last_deleted FROM nango.main.connection_syncs WHERE provider_config_key = 'github-prod' AND connection_id = 'conn-ada-github' AND sync_name = 'github-issues';
+----
+github-issues	1	2	1
+
+query T
+SELECT query FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/sync/status') ORDER BY seq DESC LIMIT 1;
+----
+{"connection_id": "conn-ada-github", "provider_config_key": "github-prod", "syncs": "github-issues"}
+
+# A pushed connection that does not belong to an integration is simply no rows.
+query I
+SELECT count(*) FROM nango.main.connection_syncs WHERE connection_id = 'conn-ops-slack';
+----
+0
+
+# ------------------------------------------------------------------ environment
+
+query TT
+SELECT name, is_set FROM nango.main.environment_variables ORDER BY name;
+----
+EMPTY_ONE	false
+REGION	true
+WEBHOOK_SIGNING_SECRET	true
+
+query I
+SELECT count(*) FROM (SELECT to_json(v)::VARCHAR AS j FROM nango.main.environment_variables v) WHERE j LIKE '%whsec%' OR j LIKE '%eu-west%';
+----
+0
+
+# environments is account-level: an environment key is refused.
+statement error
+SELECT count(*) FROM nango.main.environments;
+----
+<REGEX>:.*HTTP 401.*
+
+# ------------------------------------------------------------------- records
+
+# Typed columns from the model's JSON Schema.
+query TTTT
+SELECT column_name, column_type, null, null FROM (DESCRIBE SELECT * FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue')) WHERE column_name IN ('number', 'labels', 'locked', 'score', 'created_at', 'repo', '_record', '_nango_deleted_at') ORDER BY column_name;
+----
+_nango_deleted_at	TIMESTAMP WITH TIME ZONE	NULL	NULL
+_record	JSON	NULL	NULL
+created_at	TIMESTAMP WITH TIME ZONE	NULL	NULL
+labels	VARCHAR[]	NULL	NULL
+locked	BOOLEAN	NULL	NULL
+number	BIGINT	NULL	NULL
+repo	JSON	NULL	NULL
+score	DOUBLE	NULL	NULL
+
+query TITTTT
+SELECT id, number, title, labels, created_at, _nango_last_action FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue', page_size := 2) ORDER BY id;
+----
+i1	1	Crash on start	[bug]	2026-01-02 10:00:00+00	ADDED
+i2	2	Add dark mode	[feature, ui]	2026-02-10 08:30:00+00	UPDATED
+i3	3	Typo in README	[]	2026-03-01 00:00:00+00	UPDATED
+i4	4	Spam	[]	2026-04-01 00:00:00+00	DELETED
+i5	5	Speed up CI	[infra]	2026-11-13 15:00:00+00	ADDED
+
+# Three pages of two, following next_cursor.
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/records') WHERE query LIKE '%"limit": "2"%' AND query LIKE '%GithubIssue%';
+----
+3
+
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/records') WHERE query LIKE '%"limit": "2"%' AND query LIKE '%cursor%';
+----
+2
+
+# Every request carried the connection's routing headers.
+query T
+SELECT DISTINCT headers FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/records') WHERE query LIKE '%GithubIssue%';
+----
+{"connection-id": "conn-ada-github", "provider-config-key": "github-prod"}
+
+query TT
+SELECT id, _nango_deleted_at FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue') WHERE _nango_deleted_at IS NOT NULL;
+----
+i4	2026-11-12 00:00:00+00
+
+# Live open issues of one repo (JSON column for the nested object).
+query IT
+SELECT number, title FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue') WHERE _nango_deleted_at IS NULL AND state = 'open' AND repo->>'name' = 'app' ORDER BY number;
+----
+2	Add dark mode
+5	Speed up CI
+
+# _nango_last_modified_at > ts becomes modified_after (1 ms earlier; re-checked exactly).
+query T
+SELECT id FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue') WHERE _nango_last_modified_at > TIMESTAMPTZ '2026-11-10 09:00:00+00' ORDER BY id;
+----
+i4
+i5
+
+query T
+SELECT json_extract_string(query, '$.modified_after') FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/records') ORDER BY seq DESC LIMIT 1;
+----
+2026-11-10T08:59:59.999Z
+
+query T
+SELECT id FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue') WHERE _nango_last_modified_at >= TIMESTAMPTZ '2026-11-10 09:00:00+00' ORDER BY id;
+----
+i3
+i4
+i5
+
+# modified_after := argument.
+query T
+SELECT id FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue', modified_after := TIMESTAMPTZ '2026-11-11 00:00:00+00') ORDER BY id;
+----
+i4
+i5
+
+# _nango_last_action = / IN becomes filter; filter := narrows directly.
+query T
+SELECT id FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue') WHERE _nango_last_action IN ('ADDED', 'DELETED') ORDER BY id;
+----
+i1
+i4
+i5
+
+query T
+SELECT json_extract_string(query, '$.filter') FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/records') ORDER BY seq DESC LIMIT 1;
+----
+added,deleted
+
+query T
+SELECT id FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue', filter := 'updated') ORDER BY id;
+----
+i2
+i3
+
+statement error
+SELECT * FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue', filter := 'changed');
+----
+<REGEX>:.*filter.*
+
+# id = / IN becomes ids.
+query TT
+SELECT id, title FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubIssue') WHERE id IN ('i2', 'i5') ORDER BY id;
+----
+i2	Add dark mode
+i5	Speed up CI
+
+query T
+SELECT query_list FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/records') ORDER BY seq DESC LIMIT 1;
+----
+[["model", "GithubIssue"], ["limit", "100"], ["ids", "i2"], ["ids", "i5"]]
+
+# A model without a JSON Schema: id + _record JSON.
+query TTT
+SELECT id, _record->>'full_name', _nango_pruned_at FROM nango.main.records('github-prod', 'conn-ada-github', 'GithubRepo') ORDER BY id;
+----
+r1	acme/app	NULL
+r2	acme/docs	NULL
+r3	ada/dotfiles	2026-11-14 00:00:00+00
+
+query IRT
+SELECT count(*), avg(lead_score), max(updated_at) FROM nango.main.records('hubspot', 'conn-acme-hubspot', 'HubspotContact') WHERE email IS NOT NULL;
+----
+2	69.75	2026-11-09 10:00:00+00
+
+statement error
+SELECT * FROM nango.main.records('github-prod', 'conn-nope', 'GithubIssue');
+----
+<REGEX>:.*HTTP 404.*unknown_connection.*
+
+# ---------------------------------------------------------------------- proxy
+
+# Link-header pagination from the provider's default config; absolute next links are
+# turned back into proxy paths under the provider's base URL.
 query IIT
-SELECT count(*), sum(id), min(name) FROM nango.main.fetch_items('{NANGO_MOCK_API}', page_size := 4);
+SELECT page, item_index, item->>'full_name' FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos', paginate := 'provider', params := '{"per_page": 2}') ORDER BY page, item_index;
 ----
-25	325	item-01
+1	0	acme/app
+1	1	acme/docs
+2	0	acme/infra
+2	1	ada/dotfiles
+3	0	ada/notes
 
-query TI
-SELECT category, count(*) FROM nango.main.fetch_items('{NANGO_MOCK_API}') GROUP BY category ORDER BY category;
+# The upstream saw ada's credential (forwarded by Nango) on every page.
+query TTT
+SELECT path, query, connection FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/github/user/repos') WHERE server = 'upstream' ORDER BY seq;
 ----
-hardware	8
-service	8
-software	9
+/github/user/repos	{"per_page": "2"}	conn-ada-github
+/github/user/repos	{"page": "2", "per_page": "2"}	conn-ada-github
+/github/user/repos	{"page": "3", "per_page": "2"}	conn-ada-github
 
-# The harness runs NANGO_MOCK_API with MOCK_API_FLAKY=1: every page answers
-# 429 + Retry-After once, so every query above also exercised the retry path.
-
-# NANGO_MOCK_API_AUTH requires a bearer token ('test-token'). Every language's
-# fetch_items must put the HTTP status code in its error message.
-statement error
-SELECT count(*) FROM nango.main.fetch_items('{NANGO_MOCK_API_AUTH}');
+# Without paginate, one page.
+query I
+SELECT count(*) FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos?per_page=2');
 ----
-401
+2
 
-statement ok
-CREATE SECRET nango_api_test (TYPE nango_api, TOKEN 'test-token');
+# Cursor pagination (HubSpot default: paging.next.after → after, rows at results).
+query IT
+SELECT page, item->>'id' FROM nango.main.proxy('conn-acme-hubspot', 'hubspot', '/crm/v3/objects/contacts', paginate := 'provider', params := '{"limit": 2}') ORDER BY ALL;
+----
+1	c1
+1	c2
+2	c3
+2	c4
+3	c5
+
+# Offset pagination, given as a Nango paginate config.
+query IT
+SELECT page, item->>'title' FROM nango.main.proxy('conn-acme-pipedrive', 'pipedrive-crm', '/v1/deals', paginate := '{"type": "offset", "offset_name_in_request": "start", "limit_name_in_request": "limit", "limit": 3, "response_path": "data"}') ORDER BY ALL;
+----
+1	Acme renewal
+1	Globex pilot
+1	Initech expansion
+2	Umbrella POC
+
+query T
+SELECT query FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/pipedrive/v1/deals') WHERE server = 'upstream' ORDER BY seq;
+----
+{"limit": "3", "start": "0"}
+{"limit": "3", "start": "3"}
+
+# max_pages stops early.
+query I
+SELECT max(page) FROM nango.main.proxy('conn-acme-hubspot', 'hubspot', '/crm/v3/objects/contacts', paginate := 'provider', params := '{"limit": 1}', max_pages := 2);
+----
+2
+
+# Headers travel as Nango-Proxy-<name>; the upstream receives them, and the right credential.
+query TTT
+SELECT item->>'login', item->>'connection_id', item->'headers'->>'x-trace' FROM nango.main.proxy('conn-grace-github', 'github-prod', '/whoami', headers := '{"X-Trace": "t-1"}');
+----
+grace	conn-grace-github	t-1
+
+query T
+SELECT headers FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/proxy/whoami') ORDER BY seq DESC LIMIT 1;
+----
+{"connection-id": "conn-grace-github", "nango-proxy-x-trace": "t-1", "provider-config-key": "github-prod"}
+
+# response_path as a JSON pointer.
+query I
+SELECT sum((item->>'n')::INT) FROM nango.main.proxy('conn-ada-github', 'github-prod', '/nested', response_path := '/data/items');
+----
+6
+
+# An upstream 429 (passed back by Nango) is retried after Retry-After.
+query T
+SELECT item->>'ok' FROM nango.main.proxy('conn-ada-github', 'github-prod', '/flaky');
+----
+true
 
 query I
-SELECT count(*) FROM nango.main.fetch_items('{NANGO_MOCK_API_AUTH}', page_size := 25);
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/github/flaky') WHERE server = 'upstream';
 ----
-25
+2
 
-# Several pages: the token must survive between batches (over HTTP each batch is a
-# separate request, so a token kept only in memory is lost after page 1).
-query I
-SELECT count(*) FROM nango.main.fetch_items('{NANGO_MOCK_API_AUTH}', page_size := 7);
+# HEAD returns the response headers as the one item.
+query IT
+SELECT http_status, item->>'link' LIKE '%rel="next"%' FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos', method := 'HEAD', params := '{"per_page": 2}');
 ----
-25
+200	true
+
+# Read-only: mutating methods are refused before any request.
+statement error
+SELECT * FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos', method := 'POST');
+----
+<REGEX>:.*method.*GET.*HEAD.*
+
+statement error
+SELECT * FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos', method := 'DELETE');
+----
+<REGEX>:.*method.*GET.*HEAD.*
+
+query I
+SELECT count(*) FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/') WHERE method NOT IN ('GET', 'HEAD');
+----
+0
+
+statement error
+SELECT * FROM nango.main.proxy('conn-ada-github', 'github-prod', 'https://evil.example.com/steal');
+----
+<REGEX>:.*relative to the provider.*
+
+statement error
+SELECT * FROM nango.main.proxy('conn-ada-github', 'github-prod', '/user/repos', paginate := '{"type": "cursor"}');
+----
+<REGEX>:.*cursor_path_in_response.*
+
+statement error
+SELECT * FROM nango.main.proxy('conn-ops-slack', 'slack-bot', '/conversations.list', paginate := 'provider');
+----
+<REGEX>:.*no default proxy pagination.*
+
+statement error
+SELECT * FROM nango.main.proxy('conn-nope', 'github-prod', '/user/repos');
+----
+<REGEX>:.*HTTP 404.*unknown_connection.*
+
+# --------------------------------------------------------- account-level key
 
 statement ok
-DROP SECRET nango_api_test;
+CREATE OR REPLACE SECRET nango_fixture (TYPE nango, SECRET_KEY 'test-account-key', HOST '{NANGO_FIXTURE_URL}');
 
-# base_url must be http(s).
-statement error
-SELECT * FROM nango.main.fetch_items('ftp://example.com');
+query TT
+SELECT name, is_production FROM nango.main.environments ORDER BY name;
 ----
-<REGEX>:.*
+dev	false
+prod	true
 
-# page_size is a named argument constrained to [1, 1000].
-statement error
-SELECT * FROM nango.main.fetch_items('{NANGO_MOCK_API}', page_size := 0);
+query T
+SELECT uuid FROM nango.main.environments WHERE name = 'prod';
 ----
-<REGEX>:.*
+22222222-2222-4222-8222-222222222222
 
-statement error
-SELECT * FROM nango.main.fetch_items('{NANGO_MOCK_API}', page_size := 5000);
+query T
+SELECT query FROM read_json('{NANGO_FIXTURE_URL}/__requests?path=/environments') ORDER BY seq DESC LIMIT 1;
 ----
-<REGEX>:.*
+{"name": "prod"}

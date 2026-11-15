@@ -1,0 +1,284 @@
+{
+  "_comment": "Hand-built Nango environment in the documented API shapes (https://github.com/NangoHQ/nango/blob/master/docs/spec.yaml). proxy.base_url values are rewritten by test/mock_api/server.py to point at its fake upstream.",
+  "providers": [
+    {
+      "name": "github",
+      "display_name": "GitHub (User OAuth)",
+      "auth_mode": "OAUTH2",
+      "categories": ["dev-tools", "ticketing"],
+      "docs": "https://nango.dev/docs/integrations/all/github",
+      "authorization_url": "https://github.com/login/oauth/authorize",
+      "token_url": "https://github.com/login/oauth/access_token",
+      "default_scopes": ["repo"],
+      "proxy": {
+        "base_url": "https://api.github.com",
+        "paginate": {"type": "link", "limit_name_in_request": "per_page", "link_rel_in_response_header": "next"}
+      }
+    },
+    {
+      "name": "hubspot",
+      "display_name": "HubSpot",
+      "auth_mode": "OAUTH2",
+      "categories": ["marketing", "support", "crm"],
+      "docs": "https://nango.dev/docs/integrations/all/hubspot",
+      "authorization_url": "https://app.hubspot.com/oauth/authorize",
+      "token_url": "https://api.hubapi.com/oauth/v1/token",
+      "proxy": {
+        "base_url": "https://api.hubapi.com",
+        "paginate": {
+          "type": "cursor",
+          "cursor_path_in_response": "paging.next.after",
+          "cursor_name_in_request": "after",
+          "limit_name_in_request": "limit",
+          "response_path": "results"
+        }
+      }
+    },
+    {
+      "name": "pipedrive",
+      "display_name": "Pipedrive",
+      "auth_mode": "API_KEY",
+      "categories": ["crm"],
+      "docs": "https://nango.dev/docs/integrations/all/pipedrive",
+      "proxy": {
+        "base_url": "https://api.pipedrive.com",
+        "paginate": {
+          "type": "offset",
+          "offset_name_in_request": "start",
+          "limit_name_in_request": "limit",
+          "response_path": "data"
+        }
+      }
+    },
+    {
+      "name": "slack",
+      "display_name": "Slack",
+      "auth_mode": "OAUTH2",
+      "categories": ["communication"],
+      "docs": "https://nango.dev/docs/integrations/all/slack",
+      "authorization_url": "https://slack.com/oauth/v2/authorize",
+      "token_url": "https://slack.com/api/oauth.v2.access",
+      "proxy": {"base_url": "https://slack.com/api"}
+    },
+    {
+      "name": "stripe",
+      "display_name": "Stripe",
+      "auth_mode": "API_KEY",
+      "categories": ["payment", "accounting"],
+      "docs": "https://nango.dev/docs/integrations/all/stripe",
+      "proxy": {"base_url": "https://api.stripe.com"}
+    }
+  ],
+  "integrations": [
+    {"unique_key": "github-prod", "display_name": "GitHub (User OAuth)", "provider": "github", "logo": "https://app.nango.dev/images/template-logos/github.svg", "created_at": "2026-01-10T09:00:00.000Z", "updated_at": "2026-03-02T12:30:00.000Z", "forward_webhooks": true, "missing_fields": []},
+    {"unique_key": "hubspot", "display_name": "HubSpot", "provider": "hubspot", "logo": "https://app.nango.dev/images/template-logos/hubspot.svg", "created_at": "2026-02-01T10:00:00.000Z", "updated_at": "2026-02-01T10:00:00.000Z", "forward_webhooks": false, "missing_fields": []},
+    {"unique_key": "pipedrive-crm", "display_name": "Pipedrive", "provider": "pipedrive", "logo": "https://app.nango.dev/images/template-logos/pipedrive.svg", "created_at": "2026-04-15T08:00:00.000Z", "updated_at": "2026-04-15T08:00:00.000Z", "forward_webhooks": true, "missing_fields": []},
+    {"unique_key": "slack-bot", "display_name": "Slack", "provider": "slack", "logo": "https://app.nango.dev/images/template-logos/slack.svg", "created_at": "2026-05-20T14:00:00.000Z", "updated_at": "2026-05-21T14:00:00.000Z", "forward_webhooks": true, "missing_fields": ["oauth_client_secret"]}
+  ],
+  "integration_secrets": {
+    "_comment": "What GET /integrations/{key}?include=credentials would add. The worker must never ask for it.",
+    "github-prod": {"type": "OAUTH2", "client_id": "Iv1.github", "client_secret": "github-client-secret-DO-NOT-LEAK"}
+  },
+  "connections": [
+    {
+      "id": 101, "connection_id": "conn-ada-github", "provider": "github", "provider_config_key": "github-prod",
+      "created": "2026-01-11T09:00:00.000Z", "created_at": "2026-01-11T09:00:00.000Z", "updated_at": "2026-11-01T09:00:00.000Z", "last_fetched_at": "2026-11-14T22:00:00.000Z",
+      "metadata": {"plan": "enterprise"}, "connection_config": {},
+      "tags": {"end_user_id": "u_ada", "end_user_email": "ada@acme.test", "organization_id": "org_acme"},
+      "errors": [],
+      "end_user": {"id": "u_ada", "email": "ada@acme.test", "display_name": "Ada", "organization": {"id": "org_acme", "display_name": "Acme"}},
+      "credentials": {"type": "OAUTH2", "access_token": "gho_ada_SECRET", "refresh_token": "ghr_ada_SECRET", "expires_at": "2026-12-01T00:00:00.000Z", "raw": {"access_token": "gho_ada_SECRET", "scope": "repo"}}
+    },
+    {
+      "id": 102, "connection_id": "conn-grace-github", "provider": "github", "provider_config_key": "github-prod",
+      "created": "2026-02-11T09:00:00.000Z", "created_at": "2026-02-11T09:00:00.000Z", "updated_at": "2026-10-01T09:00:00.000Z", "last_fetched_at": "2026-10-01T09:00:00.000Z",
+      "metadata": null, "connection_config": {},
+      "tags": {"end_user_id": "u_grace", "organization_id": "org_globex"},
+      "errors": [{"type": "auth", "log_id": "log_auth_grace"}],
+      "end_user": null,
+      "credentials": {"type": "OAUTH2", "access_token": "gho_grace_SECRET", "refresh_token": "ghr_grace_SECRET", "expires_at": "2026-10-02T00:00:00.000Z", "raw": {}}
+    },
+    {
+      "id": 103, "connection_id": "conn-acme-hubspot", "provider": "hubspot", "provider_config_key": "hubspot",
+      "created": "2026-02-02T10:00:00.000Z", "created_at": "2026-02-02T10:00:00.000Z", "updated_at": "2026-11-10T10:00:00.000Z", "last_fetched_at": "2026-11-14T10:00:00.000Z",
+      "metadata": {"portal_id": 4242}, "connection_config": {"portalId": "4242"},
+      "tags": {"end_user_id": "u_ada", "organization_id": "org_acme"},
+      "errors": [{"type": "sync", "log_id": "log_sync_hubspot"}],
+      "end_user": null,
+      "credentials": {"type": "OAUTH2", "access_token": "hs_acme_SECRET", "refresh_token": "hsr_acme_SECRET", "expires_at": "2026-11-15T12:00:00.000Z", "raw": {}}
+    },
+    {
+      "id": 104, "connection_id": "conn-acme-pipedrive", "provider": "pipedrive", "provider_config_key": "pipedrive-crm",
+      "created": "2026-04-16T08:00:00.000Z", "created_at": "2026-04-16T08:00:00.000Z", "updated_at": "2026-04-16T08:00:00.000Z", "last_fetched_at": "2026-11-12T08:00:00.000Z",
+      "metadata": null, "connection_config": {},
+      "tags": {"organization_id": "org_acme"},
+      "errors": [],
+      "end_user": null,
+      "credentials": {"type": "API_KEY", "apiKey": "pd_acme_SECRET"}
+    },
+    {
+      "id": 105, "connection_id": "conn-ops-slack", "provider": "slack", "provider_config_key": "slack-bot",
+      "created": "2026-05-22T14:00:00.000Z", "created_at": "2026-05-22T14:00:00.000Z", "updated_at": "2026-05-22T14:00:00.000Z", "last_fetched_at": "2026-05-22T14:00:00.000Z",
+      "metadata": null, "connection_config": {"team.id": "T123"},
+      "tags": {},
+      "errors": [],
+      "end_user": null,
+      "credentials": {"type": "OAUTH2", "access_token": "xoxb_ops_SECRET", "raw": {}}
+    }
+  ],
+  "scripts_config": [
+    {
+      "providerConfigKey": "github-prod",
+      "provider": "github",
+      "syncs": [
+        {
+          "id": 11, "name": "github-issues", "type": "sync", "enabled": true, "runs": "every 30 minutes",
+          "track_deletes": true, "auto_start": true, "last_deployed": "2026-03-02T12:00:00.000Z",
+          "is_public": false, "pre_built": false, "version": "1.2.0", "attributes": {}, "input": {},
+          "returns": ["GithubIssue"],
+          "description": "Fetches the GitHub issues from all a user's repositories.",
+          "scopes": ["repo"],
+          "endpoints": [{"method": "GET", "path": "/issues", "group": "Issues"}],
+          "webhookSubscriptions": [],
+          "models": [{"name": "GithubIssue", "fields": [{"name": "id"}, {"name": "number"}, {"name": "title"}]}],
+          "json_schema": {
+            "definitions": {
+              "GithubIssue": {
+                "type": "object",
+                "properties": {
+                  "id": {"type": "string"},
+                  "number": {"type": "integer"},
+                  "title": {"type": "string"},
+                  "state": {"type": "string"},
+                  "labels": {"type": "array", "items": {"type": "string"}},
+                  "comments": {"type": "integer"},
+                  "locked": {"type": "boolean"},
+                  "score": {"type": "number"},
+                  "assignee": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                  "created_at": {"type": "string", "format": "date-time"},
+                  "repo": {"type": "object", "properties": {"owner": {"type": "string"}, "name": {"type": "string"}}}
+                },
+                "required": ["id", "number", "title", "state"]
+              }
+            }
+          }
+        },
+        {
+          "id": 12, "name": "github-repos", "type": "sync", "enabled": true, "runs": "every day",
+          "track_deletes": false, "auto_start": false, "last_deployed": "2026-03-02T12:00:00.000Z",
+          "is_public": true, "pre_built": true, "version": "0.0.3", "attributes": {}, "input": {},
+          "returns": ["GithubRepo"],
+          "description": "Lists the repositories a user can access.",
+          "scopes": ["repo"], "endpoints": [{"method": "GET", "path": "/repos"}], "webhookSubscriptions": [],
+          "models": [{"name": "GithubRepo", "fields": []}],
+          "json_schema": null
+        }
+      ],
+      "actions": [
+        {
+          "id": 21, "name": "create-issue", "type": "action", "last_deployed": "2026-03-02T12:00:00.000Z",
+          "is_public": false, "pre_built": false, "version": "4", "attributes": {}, "input": {"name": "CreateIssueInput"},
+          "returns": ["GithubIssue"], "description": "Creates an issue in a repository.", "scopes": ["repo"],
+          "endpoints": [{"method": "POST", "path": "/issues"}], "models": [{"name": "CreateIssueInput", "fields": []}],
+          "json_schema": null
+        }
+      ],
+      "on-events": []
+    },
+    {
+      "providerConfigKey": "hubspot",
+      "provider": "hubspot",
+      "syncs": [
+        {
+          "id": 31, "name": "hubspot-contacts", "type": "sync", "enabled": true, "runs": "every hour",
+          "track_deletes": false, "auto_start": true, "last_deployed": "2026-02-03T08:00:00.000Z",
+          "is_public": true, "pre_built": true, "version": "2.0.1", "attributes": {}, "input": {},
+          "returns": ["HubspotContact"], "description": "Syncs HubSpot CRM contacts.", "scopes": ["crm.objects.contacts.read"],
+          "endpoints": [{"method": "GET", "path": "/contacts"}], "webhookSubscriptions": [],
+          "models": [{"name": "HubspotContact", "fields": []}],
+          "json_schema": {
+            "definitions": {
+              "HubspotContact": {
+                "type": "object",
+                "properties": {
+                  "id": {"type": "string"},
+                  "email": {"type": ["string", "null"]},
+                  "first_name": {"type": "string"},
+                  "lifecycle_stage": {"type": "string"},
+                  "lead_score": {"type": "number"},
+                  "updated_at": {"type": "string", "format": "date-time"}
+                },
+                "required": ["id"]
+              }
+            }
+          }
+        }
+      ],
+      "actions": [
+        {
+          "id": 32, "name": "fetch-properties", "type": "action", "last_deployed": "2026-02-03T08:00:00.000Z",
+          "is_public": true, "pre_built": true, "version": "1", "attributes": {}, "input": {}, "returns": ["HubspotProperty"],
+          "description": "Fetch the contact property definitions.", "scopes": ["crm.schemas.contacts.read"],
+          "endpoints": [{"method": "GET", "path": "/properties"}], "models": [], "json_schema": null
+        }
+      ],
+      "on-events": []
+    }
+  ],
+  "sync_status": [
+    {"provider_config_key": "github-prod", "id": "s-11-101", "connection_id": "conn-ada-github", "name": "github-issues", "variant": "base", "status": "SUCCESS", "type": "INCREMENTAL", "finishedAt": "2026-11-14T21:30:00.000Z", "nextScheduledSyncAt": "2026-11-14T22:00:00.000Z", "frequency": "every 30 minutes", "latestResult": {"GithubIssue": {"added": 1, "updated": 2, "deleted": 1}}, "recordCount": {"GithubIssue": 5}, "checkpoint": {"since": "2026-11-14T21:00:00.000Z"}},
+    {"provider_config_key": "github-prod", "id": "s-12-101", "connection_id": "conn-ada-github", "name": "github-repos", "variant": "base", "status": "RUNNING", "type": "INITIAL", "finishedAt": "2026-11-13T00:00:00.000Z", "nextScheduledSyncAt": "2026-11-15T00:00:00.000Z", "frequency": "every day", "latestResult": {"GithubRepo": {"added": 3, "updated": 0, "deleted": 0}}, "recordCount": {"GithubRepo": 3}, "checkpoint": null},
+    {"provider_config_key": "github-prod", "id": "s-11-102", "connection_id": "conn-grace-github", "name": "github-issues", "variant": "base", "status": "ERROR", "type": "INCREMENTAL", "finishedAt": "2026-10-01T09:00:00.000Z", "nextScheduledSyncAt": "2026-11-15T00:00:00.000Z", "frequency": "every 30 minutes", "latestResult": {}, "recordCount": {"GithubIssue": 0}, "checkpoint": null},
+    {"provider_config_key": "hubspot", "id": "s-31-103", "connection_id": "conn-acme-hubspot", "name": "hubspot-contacts", "variant": "base", "status": "PAUSED", "type": "INCREMENTAL", "finishedAt": "2026-11-10T10:00:00.000Z", "frequency": "every hour", "latestResult": {"HubspotContact": {"added": 0, "updated": 1, "deleted": 0}}, "recordCount": {"HubspotContact": 3}, "checkpoint": null}
+  ],
+  "records": {
+    "github-prod|conn-ada-github|GithubIssue": [
+      {"id": "i1", "number": 1, "title": "Crash on start", "state": "closed", "labels": ["bug"], "comments": 3, "locked": false, "score": 0.5, "assignee": "ada", "created_at": "2026-01-02T10:00:00Z", "repo": {"owner": "acme", "name": "app"}, "_nango_metadata": {"first_seen_at": "2026-03-02T12:05:00.000Z", "last_modified_at": "2026-03-02T12:05:00.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": null}},
+      {"id": "i2", "number": 2, "title": "Add dark mode", "state": "open", "labels": ["feature", "ui"], "comments": 0, "locked": false, "score": 2.25, "assignee": null, "created_at": "2026-02-10T08:30:00Z", "repo": {"owner": "acme", "name": "app"}, "_nango_metadata": {"first_seen_at": "2026-03-02T12:05:00.000Z", "last_modified_at": "2026-11-01T10:00:00.000Z", "last_action": "UPDATED", "deleted_at": null, "pruned_at": null}},
+      {"id": "i3", "number": 3, "title": "Typo in README", "state": "open", "labels": [], "comments": 1, "locked": true, "score": 1, "assignee": "grace", "created_at": "2026-03-01T00:00:00Z", "repo": {"owner": "acme", "name": "docs"}, "_nango_metadata": {"first_seen_at": "2026-03-02T12:05:00.000Z", "last_modified_at": "2026-11-10T09:00:00.000Z", "last_action": "UPDATED", "deleted_at": null, "pruned_at": null}},
+      {"id": "i4", "number": 4, "title": "Spam", "state": "closed", "labels": [], "comments": 0, "locked": true, "score": 0, "assignee": null, "created_at": "2026-04-01T00:00:00Z", "repo": {"owner": "acme", "name": "app"}, "_nango_metadata": {"first_seen_at": "2026-04-01T00:10:00.000Z", "last_modified_at": "2026-11-12T00:00:00.000Z", "last_action": "DELETED", "deleted_at": "2026-11-12T00:00:00.000Z", "pruned_at": null}},
+      {"id": "i5", "number": 5, "title": "Speed up CI", "state": "open", "labels": ["infra"], "comments": 7, "locked": false, "score": 3.5, "assignee": "ada", "created_at": "2026-11-13T15:00:00Z", "repo": {"owner": "acme", "name": "app"}, "_nango_metadata": {"first_seen_at": "2026-11-14T21:30:00.000Z", "last_modified_at": "2026-11-14T21:30:00.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": null}}
+    ],
+    "github-prod|conn-ada-github|GithubRepo": [
+      {"id": "r1", "full_name": "acme/app", "private": true, "stars": 42, "updated_at": "2026-11-01T00:00:00Z", "_nango_metadata": {"first_seen_at": "2026-11-13T00:00:00.000Z", "last_modified_at": "2026-11-13T00:00:00.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": null}},
+      {"id": "r2", "full_name": "acme/docs", "private": false, "stars": 7, "updated_at": "2026-10-01T00:00:00Z", "_nango_metadata": {"first_seen_at": "2026-11-13T00:00:00.000Z", "last_modified_at": "2026-11-13T00:00:01.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": null}},
+      {"id": "r3", "full_name": "ada/dotfiles", "private": false, "stars": 1, "updated_at": "2025-01-01T00:00:00Z", "_nango_metadata": {"first_seen_at": "2026-11-13T00:00:00.000Z", "last_modified_at": "2026-11-13T00:00:02.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": "2026-11-14T00:00:00.000Z"}}
+    ],
+    "hubspot|conn-acme-hubspot|HubspotContact": [
+      {"id": "c1", "email": "lin@example.com", "first_name": "Lin", "lifecycle_stage": "customer", "lead_score": 88.5, "updated_at": "2026-11-09T10:00:00Z", "_nango_metadata": {"first_seen_at": "2026-02-03T08:10:00.000Z", "last_modified_at": "2026-11-10T10:00:00.000Z", "last_action": "UPDATED", "deleted_at": null, "pruned_at": null}},
+      {"id": "c2", "email": null, "first_name": "Sam", "lifecycle_stage": "lead", "lead_score": 12, "updated_at": "2026-02-03T08:00:00Z", "_nango_metadata": {"first_seen_at": "2026-02-03T08:10:00.000Z", "last_modified_at": "2026-02-03T08:10:00.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": null}},
+      {"id": "c3", "email": "kim@example.com", "first_name": "Kim", "lifecycle_stage": "opportunity", "lead_score": 51, "updated_at": "2026-05-05T05:00:00Z", "_nango_metadata": {"first_seen_at": "2026-02-03T08:10:00.000Z", "last_modified_at": "2026-05-05T05:05:00.000Z", "last_action": "ADDED", "deleted_at": null, "pruned_at": null}}
+    ]
+  },
+  "environment_variables": [
+    {"name": "WEBHOOK_SIGNING_SECRET", "value": "whsec_DO_NOT_LEAK_123"},
+    {"name": "REGION", "value": "eu-west-1"},
+    {"name": "EMPTY_ONE", "value": ""}
+  ],
+  "environments": [
+    {"id": 1, "uuid": "11111111-1111-4111-8111-111111111111", "name": "dev", "is_production": false},
+    {"id": 2, "uuid": "22222222-2222-4222-8222-222222222222", "name": "prod", "is_production": true}
+  ],
+  "upstream": {
+    "github_repos": [
+      {"id": 1, "full_name": "acme/app", "private": true},
+      {"id": 2, "full_name": "acme/docs", "private": false},
+      {"id": 3, "full_name": "acme/infra", "private": true},
+      {"id": 4, "full_name": "ada/dotfiles", "private": false},
+      {"id": 5, "full_name": "ada/notes", "private": false}
+    ],
+    "hubspot_contacts": [
+      {"id": "c1", "properties": {"email": "lin@example.com", "firstname": "Lin"}},
+      {"id": "c2", "properties": {"email": null, "firstname": "Sam"}},
+      {"id": "c3", "properties": {"email": "kim@example.com", "firstname": "Kim"}},
+      {"id": "c4", "properties": {"email": "max@example.com", "firstname": "Max"}},
+      {"id": "c5", "properties": {"email": "zoe@example.com", "firstname": "Zoe"}}
+    ],
+    "pipedrive_deals": [
+      {"id": 1, "title": "Acme renewal", "value": 12000, "status": "open"},
+      {"id": 2, "title": "Globex pilot", "value": 3000, "status": "won"},
+      {"id": 3, "title": "Initech expansion", "value": 45000, "status": "open"},
+      {"id": 4, "title": "Umbrella POC", "value": 0, "status": "lost"}
+    ]
+  }
+}

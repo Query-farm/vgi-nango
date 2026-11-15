@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
-Initial worker generated from the VGI starter template.
+First release of the Nango worker (from vgi-starter-typescript v1.3.0).
+
+- Tables: `providers`, `integrations`, `syncs`, `actions`, `connection_syncs`,
+  `environment_variables`, `environments`.
+- Table functions: `connections()`, `records()` (JSON-Schema-typed columns, cursor paging,
+  `modified_after` / `filter` / `ids` pushdown) and `proxy()` (GET/HEAD only, Nango-style
+  cursor / link / offset pagination).
+- `nango` secret (`SECRET_KEY`, `HOST`); tokens, client secrets and env-var values never returned.
 
 Targets: @query-farm/vgi 0.50 · VGI protocol 3.3 · Haybarn 2.0.0rc11 · vgi-lint-check 2.x (unpinned)
