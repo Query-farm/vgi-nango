@@ -3,6 +3,7 @@
 ## 0.1.2 (2026-11-16)
 
 - Bump @query-farm/vgi to 0.50.1.
+- CI tooling (haybarn-unittest, lint helpers) runs on Python 3.14.
 
 ## 0.1.1
 
