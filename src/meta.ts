@@ -117,11 +117,12 @@ export const CATALOG_DOC_MD =
   SOURCES_MD;
 
 export const SCHEMA_DOC_LLM =
-  "Nango objects as SQL. Parameterless listings are tables (providers, integrations, syncs, actions, " +
-  "connection_syncs, environment_variables, environments); connections(tags := …) is a table function; " +
-  "records(integration, connection_id, model, …) reads a sync's stored records; proxy(connection_id, " +
-  "provider_config_key, path, …) calls the upstream API through Nango, GET/HEAD only. integration = " +
-  "provider_config_key = integrations.unique_key throughout. All objects need a `nango` secret.";
+  "Nango objects as SQL. Parameterless listings of the environment's setup are plain tables; anything that " +
+  "needs arguments is a table function: connections filtered by tags, the records a sync stored (by " +
+  "integration, connection id and model, typed from the model's JSON Schema), and proxy(connection_id, " +
+  "provider_config_key, path, …), which calls the upstream API through Nango with GET/HEAD only. The " +
+  "integration key is the same value everywhere (integration = provider_config_key = the integration's " +
+  "unique_key), so tables join on it. All objects need a `nango` secret.";
 
 export const SCHEMA_DOC_MD =
   "## main\n\n" +
